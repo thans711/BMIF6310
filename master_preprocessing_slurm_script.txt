@@ -1,0 +1,68 @@
+#!/bin/bash
+#SBATCH --mail-user=tyler.j.hansen@vanderbilt.edu 
+#SBATCH --mail-type=ALL 
+#SBATCH --nodes=1 
+#SBATCH --ntasks=1 
+#SBATCH --cpus-per-task=8
+#SBATCH --time=2:00:00 
+#SBATCH --mem=16G 
+
+#######################################################
+#This is a slurm script for processing fastq files. This script will first trim fastq files and then perform QC. Trimmed reads are then mapped to the human genome, converted to bam and sorted. 
+#Input is .fastq.gz and output is .html/.fq/.sam
+#To execute: sbatch path_to_example.slurm Run barcode
+#run is EHXXXX
+#Barcode is BarX where X is a given number
+#See loop script - preproccessing-loop.sh
+#######################################################
+
+#Load modules
+module load GCC/5.4.0-2.26
+module load cutadapt/1.9.1-Python-3.5.2
+module load Bowtie2/2.3.2
+module load SAMtools/1.5
+
+#Set variables and paths
+RUN=$1
+BAR=$2
+INDEX=/home/hodgese/data/human_genome/bt2/hg19
+TJH=/data/hodges_lab/${RUN}/hansetj1
+
+#Echo variables to keep track in .out or .err files
+echo "$RUN"
+echo "$BAR"
+pwd
+
+#Trim reads and assess quality with Trim Galore! 8-12hrs
+echo "trimming ${BAR}"
+trim_galore --fastqc --fastqc_args "--outdir ${TJH}/2_fastQC" --paired --retain_unpaired --dont_gzip --output_dir ${TJH}/1_trimmed_reads /data/hodges_lab/${RUN}/${BAR}_R1.fastq.gz /data/hodges_lab/${RUN}/${BAR}_R2.fastq.gz
+echo "trimming complete"
+
+#Map reads to the human genome# 4-8hrs
+echo "mapping ${BAR}"
+bowtie2 -p 8 -X 2000 --no-discordant --no-mixed -x ${INDEX} -1 ${TJH}/1_trimmed_reads/${BAR}_R1_val_1.fq -2 ${TJH}/1_trimmed_reads/${BAR}_R2_val_2.fq -S ${TJH}/3_mapped_reads/${BAR}.sam
+# -p corresponds to number of cores(threads)
+# -X corresponds to the maximum fragment length
+# --no-discordant removes reads that fail to meet alignment criteria (specified by no mixed/contain/overlap)
+# --no-mixed disables single-end read alignment for paired reads that cannot be mapped
+# --no-contain removes paired reads in which a read is contained within its mate
+# --no-overlap removes paired reads in which the mates overalap with each other
+# -x corersponds to the basename of the index for the reference genome
+# -1 corresponds to mate 1 of paired set
+# -2 corresponds to mate 2 of paired set
+# -S corresponds to the .sam output file
+echo "finished mapping ${BAR}"
+
+#Convert Sam to Bam
+samtools view -@8 -S -b ${TJH}/3_mapped_reads/${BAR}.sam > ${TJH}/3_mapped_reads/${BAR}.bam
+
+#Sort Bam 
+samtools sort -@8 ${TJH}/3_mapped_reads/${BAR}.bam -o ${TJH}/3_mapped_reads/${BAR}.sorted.bam
+
+#Index sorted bam files 
+samtools index -@8 -b ${TJH}/3_mapped_reads/${BAR}.sorted.bam ${TJH}/3_mapped_reads/${BAR}.sorted.bami
+
+#Remove mtDNA reads
+samtools view -b ${TJH}/3_mapped_reads/${BAR}.sorted.bam chr1 chr2 chr3 chr4 chr5 chr6 chr7 chr8 chr9 chr10 chr11 chr12 chr13 chr14 chr15 chr16 chr17 chr18 chr19 chr20 chr21 chr22 chrX chrY > ${TJH}/3_mapped_reads/${BAR}.no_chrM.sorted.bam
+
+echo "done"
